@@ -2,6 +2,8 @@ import { detectPitch } from './pitch.js';
 import { freqToNote } from './notes.js';
 import { buildTabDisplay } from './tab.js';
 
+console.log('[voice-to-tab] app.js v3 loaded');
+
 const recordBtn = document.getElementById('recordBtn');
 const clearBtn = document.getElementById('clearBtn');
 const statusEl = document.getElementById('status');
@@ -38,6 +40,7 @@ clearBtn.addEventListener('click', clearTab);
 renderTab();
 
 async function toggleRecording() {
+  console.log('[voice-to-tab] record button clicked, recording=', recording);
   if (recording) {
     stopRecording('Stopped');
   } else {
@@ -46,11 +49,13 @@ async function toggleRecording() {
 }
 
 async function startRecording() {
+  console.log('[voice-to-tab] requesting microphone...');
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    console.log('[voice-to-tab] microphone granted, tracks=', mediaStream.getTracks().length);
   } catch (err) {
     statusEl.textContent = `Microphone error: ${err.message}`;
-    console.error(err);
+    console.error('[voice-to-tab] mic error:', err);
     return;
   }
 
