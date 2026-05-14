@@ -2,10 +2,13 @@ import { detectPitch } from './pitch.js';
 import { freqToNote } from './notes.js';
 import { buildTabDisplay } from './tab.js';
 
-console.log('[voice-to-tab] app.js v3 loaded');
+console.log('[voice-to-tab] app.js v4 loaded (playback enabled)');
 
 const recordBtn = document.getElementById('recordBtn');
+const playBtn = document.getElementById('playBtn');
 const clearBtn = document.getElementById('clearBtn');
+const tempoInput = document.getElementById('tempoInput');
+const tempoValueEl = document.getElementById('tempoValue');
 const statusEl = document.getElementById('status');
 const currentNoteEl = document.getElementById('currentNote');
 const currentFreqEl = document.getElementById('currentFreq');
@@ -32,10 +35,17 @@ let recording = false;
 let pendingMidi = null;
 let pendingCount = 0;
 let lastCommittedMidi = null;
-let debugFrame = 0;
+
+let isPlaying = false;
+let playbackTimeoutId = null;
+let synth = null;
 
 recordBtn.addEventListener('click', toggleRecording);
 clearBtn.addEventListener('click', clearTab);
+playBtn.addEventListener('click', togglePlayback);
+tempoInput.addEventListener('input', () => {
+  tempoValueEl.textContent = `${tempoInput.value} BPM`;
+});
 
 renderTab();
 
@@ -115,10 +125,6 @@ function analyse() {
 
   const freq = detectPitch(buffer, audioContext.sampleRate);
 
-  if (++debugFrame % 15 === 0) {
-    console.log(`[voice-to-tab] rms=${rms.toFixed(4)} freq=${freq.toFixed(1)}Hz`);
-  }
-
   if (freq >= MIN_FREQ && freq <= MAX_FREQ) {
     const note = freqToNote(freq);
     currentNoteEl.textContent = note.name;
@@ -161,11 +167,67 @@ function renderTab() {
   notesLogEl.innerHTML = detectedNotes
     .map((n) => `<span class="note-chip">${n.name}</span>`)
     .join('');
+  playBtn.disabled = detectedNotes.length === 0 || isPlaying;
 }
 
 function clearTab() {
+  if (isPlaying) stopPlayback();
   detectedNotes.length = 0;
   resetPending();
   lastCommittedMidi = null;
   renderTab();
+}
+
+async function togglePlayback() {
+  if (isPlaying) {
+    stopPlayback();
+    return;
+  }
+  if (!detectedNotes.length) return;
+
+  const Tone = window.Tone;
+  if (!Tone) {
+    console.error('[voice-to-tab] Tone.js not loaded');
+    return;
+  }
+
+  await Tone.start();
+  synth = new Tone.PluckSynth({
+    attackNoise: 1.2,
+    dampening: 4000,
+    resonance: 0.92,
+  }).toDestination();
+
+  const bpm = Number(tempoInput.value) || 100;
+  const noteDur = 60 / bpm; // one beat = quarter note
+
+  isPlaying = true;
+  playBtn.textContent = 'Stop';
+  playBtn.classList.add('playing');
+  recordBtn.disabled = true;
+
+  const start = Tone.now() + 0.05;
+  for (let i = 0; i < detectedNotes.length; i++) {
+    const freq = Tone.Frequency(detectedNotes[i].midi, 'midi').toFrequency();
+    synth.triggerAttack(freq, start + i * noteDur);
+  }
+
+  const totalMs = (detectedNotes.length * noteDur + 0.5) * 1000;
+  playbackTimeoutId = setTimeout(stopPlayback, totalMs);
+}
+
+function stopPlayback() {
+  if (playbackTimeoutId) {
+    clearTimeout(playbackTimeoutId);
+    playbackTimeoutId = null;
+  }
+  if (synth) {
+    synth.dispose();
+    synth = null;
+  }
+  isPlaying = false;
+  playBtn.textContent = 'Play';
+  playBtn.classList.remove('playing');
+  recordBtn.disabled = false;
+  playBtn.disabled = detectedNotes.length === 0;
 }
