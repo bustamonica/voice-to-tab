@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voice to Guitar Tab</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Voice to Guitar Tab</h1>
+      <p class="subtitle">Hum a melody and get guitar tablature in real time.</p>
+    </header>
+
+    <section class="controls">
+      <button id="recordBtn" class="primary" type="button">Start Recording</button>
+      <button id="clearBtn" class="secondary" type="button">Clear</button>
+    </section>
+
+    <section class="status-bar">
+      <div id="status" class="status">Ready</div>
+      <div class="current-pitch">
+        <span class="label">Pitch:</span>
+        <span id="currentNote" class="note">—</span>
+        <span id="currentFreq" class="freq"></span>
+      </div>
+    </section>
+
+    <section class="tab-output">
+      <h2>Tablature (standard tuning)</h2>
+      <pre id="tabDisplay" class="tab"></pre>
+    </section>
+
+    <section class="notes-log">
+      <h2>Detected Notes</h2>
+      <div id="notesLog" class="notes-list"></div>
+    </section>
+
+    <footer>
+      <p>
+        Tip: hum clearly, one note at a time. Lower notes (around C3–C5) work
+        best. Run via <code>npm run serve</code> or any static HTTP server —
+        microphone access requires <code>http://localhost</code> or HTTPS.
+      </p>
+    </footer>
+  </main>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

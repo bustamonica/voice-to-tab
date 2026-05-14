@@ -1,0 +1,10 @@
+{
+  "name": "voice-to-tab",
+  "version": "0.1.0",
+  "description": "Hum into your mic and get guitar tablature back",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "npx --yes serve -p 8080 ."
+  }
+}
