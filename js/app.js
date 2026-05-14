@@ -30,6 +30,7 @@ let recording = false;
 let pendingMidi = null;
 let pendingCount = 0;
 let lastCommittedMidi = null;
+let debugFrame = 0;
 
 recordBtn.addEventListener('click', toggleRecording);
 clearBtn.addEventListener('click', clearTab);
@@ -46,9 +47,7 @@ async function toggleRecording() {
 
 async function startRecording() {
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
-    });
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
     statusEl.textContent = `Microphone error: ${err.message}`;
     console.error(err);
@@ -110,6 +109,10 @@ function analyse() {
   levelBarEl.style.width = `${(level * 100).toFixed(1)}%`;
 
   const freq = detectPitch(buffer, audioContext.sampleRate);
+
+  if (++debugFrame % 15 === 0) {
+    console.log(`[voice-to-tab] rms=${rms.toFixed(4)} freq=${freq.toFixed(1)}Hz`);
+  }
 
   if (freq >= MIN_FREQ && freq <= MAX_FREQ) {
     const note = freqToNote(freq);

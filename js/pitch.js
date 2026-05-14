@@ -6,8 +6,8 @@
 // first peak after the initial descent, then parabolically interpolate around
 // that peak for sub-sample accuracy.
 
-const MIN_RMS = 0.01;
-const EDGE_THRESHOLD = 0.2;
+const MIN_RMS = 0.005;
+const EDGE_THRESHOLD = 0.1;
 
 export function detectPitch(buffer, sampleRate) {
   const size = buffer.length;
