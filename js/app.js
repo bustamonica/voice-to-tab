@@ -9,6 +9,7 @@ const currentNoteEl = document.getElementById('currentNote');
 const currentFreqEl = document.getElementById('currentFreq');
 const tabDisplayEl = document.getElementById('tabDisplay');
 const notesLogEl = document.getElementById('notesLog');
+const levelBarEl = document.getElementById('levelBar');
 
 // A detected pitch must repeat this many analysis frames in a row before it's
 // committed to the tab. Filters out brief glissandos and analysis jitter.
@@ -94,12 +95,20 @@ function stopRecording(label) {
   statusEl.classList.remove('active');
   currentNoteEl.textContent = '—';
   currentFreqEl.textContent = '';
+  levelBarEl.style.width = '0%';
 }
 
 function analyse() {
   if (!recording || !analyser) return;
   const buffer = new Float32Array(analyser.fftSize);
   analyser.getFloatTimeDomainData(buffer);
+
+  let rms = 0;
+  for (let i = 0; i < buffer.length; i++) rms += buffer[i] * buffer[i];
+  rms = Math.sqrt(rms / buffer.length);
+  const level = Math.min(1, rms * 8);
+  levelBarEl.style.width = `${(level * 100).toFixed(1)}%`;
+
   const freq = detectPitch(buffer, audioContext.sampleRate);
 
   if (freq >= MIN_FREQ && freq <= MAX_FREQ) {

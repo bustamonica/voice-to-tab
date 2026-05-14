@@ -106,6 +106,22 @@ button.secondary:hover { border-color: var(--accent-2); }
   50% { opacity: .35; }
 }
 
+.meter {
+  flex: 1;
+  height: 6px;
+  background: var(--panel-2);
+  border-radius: 999px;
+  overflow: hidden;
+  max-width: 200px;
+}
+
+.meter-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent-2), var(--accent));
+  transition: width 60ms linear;
+}
+
 .current-pitch .label {
   color: var(--muted);
   margin-right: .35rem;
