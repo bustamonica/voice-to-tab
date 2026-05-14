@@ -1,62 +1,65 @@
-// Time-domain autocorrelation pitch detector for monophonic input (humming,
-// whistling, sung notes). Returns the fundamental frequency in Hz, or -1 if no
-// clear pitch is found in the buffer.
+// YIN pitch detector — Cheveigné & Kawahara (2002).
+// Far more accurate than plain autocorrelation on monophonic signals like
+// humming, because the cumulative-mean-normalized difference function (step 3)
+// strongly suppresses octave errors.
 //
-// The approach: trim near-silent edges, compute the autocorrelation, find the
-// first peak after the initial descent, then parabolically interpolate around
-// that peak for sub-sample accuracy.
+// Returns the fundamental frequency in Hz, or -1 if no clear pitch.
 
 const MIN_RMS = 0.005;
-const EDGE_THRESHOLD = 0.1;
+const THRESHOLD = 0.15;
 
 export function detectPitch(buffer, sampleRate) {
   const size = buffer.length;
+  const tauMax = Math.floor(size / 2);
 
   let rms = 0;
   for (let i = 0; i < size; i++) rms += buffer[i] * buffer[i];
   rms = Math.sqrt(rms / size);
   if (rms < MIN_RMS) return -1;
 
-  let start = 0;
-  let end = size - 1;
-  for (let i = 0; i < size / 2; i++) {
-    if (Math.abs(buffer[i]) < EDGE_THRESHOLD) { start = i; break; }
-  }
-  for (let i = 1; i < size / 2; i++) {
-    if (Math.abs(buffer[size - i]) < EDGE_THRESHOLD) { end = size - i; break; }
-  }
-
-  const trimmed = buffer.subarray(start, end);
-  const n = trimmed.length;
-  if (n < 32) return -1;
-
-  const c = new Float32Array(n);
-  for (let lag = 0; lag < n; lag++) {
+  // 1) Difference function
+  const yin = new Float32Array(tauMax);
+  for (let tau = 1; tau < tauMax; tau++) {
     let sum = 0;
-    for (let j = 0; j < n - lag; j++) sum += trimmed[j] * trimmed[j + lag];
-    c[lag] = sum;
+    for (let j = 0; j < tauMax; j++) {
+      const d = buffer[j] - buffer[j + tau];
+      sum += d * d;
+    }
+    yin[tau] = sum;
   }
 
-  let d = 0;
-  while (d + 1 < n && c[d] > c[d + 1]) d++;
+  // 2) Cumulative mean normalized difference
+  yin[0] = 1;
+  let running = 0;
+  for (let tau = 1; tau < tauMax; tau++) {
+    running += yin[tau];
+    yin[tau] *= tau / running;
+  }
 
-  let maxVal = -1;
-  let maxPos = -1;
-  for (let i = d; i < n; i++) {
-    if (c[i] > maxVal) {
-      maxVal = c[i];
-      maxPos = i;
+  // 3) Absolute threshold — pick the first dip below THRESHOLD, then descend to
+  //    its local minimum (so we don't latch onto a noisy shoulder).
+  let tau = -1;
+  for (let i = 2; i < tauMax; i++) {
+    if (yin[i] < THRESHOLD) {
+      while (i + 1 < tauMax && yin[i + 1] < yin[i]) i++;
+      tau = i;
+      break;
     }
   }
-  if (maxPos <= 0 || maxPos >= n - 1) return -1;
+  if (tau === -1) return -1;
 
-  const x1 = c[maxPos - 1];
-  const x2 = c[maxPos];
-  const x3 = c[maxPos + 1];
-  const a = (x1 + x3 - 2 * x2) / 2;
-  const b = (x3 - x1) / 2;
-  const period = a ? maxPos - b / (2 * a) : maxPos;
+  // 4) Parabolic interpolation around the minimum for sub-sample accuracy
+  const x0 = tau > 1 ? tau - 1 : tau;
+  const x2 = tau + 1 < tauMax ? tau + 1 : tau;
+  let refined = tau;
+  if (x0 !== tau && x2 !== tau) {
+    const s0 = yin[x0];
+    const s1 = yin[tau];
+    const s2 = yin[x2];
+    const denom = 2 * (2 * s1 - s2 - s0);
+    if (denom !== 0) refined = tau + (s2 - s0) / denom;
+  }
 
-  if (period <= 0) return -1;
-  return sampleRate / period;
+  if (refined <= 0) return -1;
+  return sampleRate / refined;
 }

@@ -1,8 +1,8 @@
 import { detectPitch } from './pitch.js';
-import { freqToNote } from './notes.js';
+import { freqToNote, midiToName } from './notes.js';
 import { buildTabDisplay } from './tab.js';
 
-console.log('[voice-to-tab] app.js v4 loaded (playback enabled)');
+console.log('[voice-to-tab] app.js v5 loaded (YIN + sliding-window mode)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -16,9 +16,13 @@ const tabDisplayEl = document.getElementById('tabDisplay');
 const notesLogEl = document.getElementById('notesLog');
 const levelBarEl = document.getElementById('levelBar');
 
-// A detected pitch must repeat this many analysis frames in a row before it's
-// committed to the tab. Filters out brief glissandos and analysis jitter.
-const STABLE_FRAMES = 3;
+// Commit a new note when at least COMMIT_AGREE of the last HISTORY_SIZE frames
+// agree on the same MIDI value. A sliding window tolerates the small jitter
+// you naturally get during a sustained hum (one occasional off-frame between
+// many correct ones) without committing transient pitches between notes.
+const HISTORY_SIZE = 9;
+const COMMIT_AGREE = 6;
+const SILENCE_FRAMES_TO_END_NOTE = 5;
 
 // Pitch range that's plausible for human humming / singing.
 const MIN_FREQ = 65;   // ~C2
@@ -32,9 +36,9 @@ let mediaStream = null;
 let rafId = null;
 let recording = false;
 
-let pendingMidi = null;
-let pendingCount = 0;
+const pitchHistory = [];
 let lastCommittedMidi = null;
+let silenceStreak = 0;
 
 let isPlaying = false;
 let playbackTimeoutId = null;
@@ -129,20 +133,21 @@ function analyse() {
     const note = freqToNote(freq);
     currentNoteEl.textContent = note.name;
     currentFreqEl.textContent = `(${freq.toFixed(1)} Hz)`;
+    silenceStreak = 0;
 
-    if (pendingMidi === note.midi) {
-      pendingCount++;
-      if (pendingCount === STABLE_FRAMES && note.midi !== lastCommittedMidi) {
-        commitNote(note);
-      }
-    } else {
-      pendingMidi = note.midi;
-      pendingCount = 1;
+    pitchHistory.push(note.midi);
+    if (pitchHistory.length > HISTORY_SIZE) pitchHistory.shift();
+
+    const consensus = modeWithCount(pitchHistory);
+    if (consensus.count >= COMMIT_AGREE && consensus.midi !== lastCommittedMidi) {
+      commitNote({ midi: consensus.midi, name: midiToName(consensus.midi) });
     }
   } else {
     currentNoteEl.textContent = '—';
     currentFreqEl.textContent = '';
-    resetPending();
+    silenceStreak++;
+    if (silenceStreak >= SILENCE_FRAMES_TO_END_NOTE) resetPending();
+
   }
 
   rafId = requestAnimationFrame(analyse);
@@ -155,11 +160,26 @@ function commitNote(note) {
 }
 
 function resetPending() {
-  pendingMidi = null;
-  pendingCount = 0;
+  pitchHistory.length = 0;
+  silenceStreak = 0;
   // A gap of silence ends a held note, so the next detection of the same MIDI
   // value should be treated as a new note onset.
   lastCommittedMidi = null;
+}
+
+function modeWithCount(arr) {
+  const counts = new Map();
+  let bestMidi = arr[0];
+  let bestCount = 0;
+  for (const m of arr) {
+    const c = (counts.get(m) || 0) + 1;
+    counts.set(m, c);
+    if (c > bestCount) {
+      bestCount = c;
+      bestMidi = m;
+    }
+  }
+  return { midi: bestMidi, count: bestCount };
 }
 
 function renderTab() {
