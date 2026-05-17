@@ -2,8 +2,9 @@ import { detectPitch } from './pitch.js';
 import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
+import { estimateTempo, quantize } from './quantize.js';
 
-console.log('[voice-to-tab] app.js v13 loaded (samples self-hosted)');
+console.log('[voice-to-tab] app.js v14 loaded (tempo + quantization modal)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -18,6 +19,13 @@ const notesLogEl = document.getElementById('notesLog');
 const levelBarEl = document.getElementById('levelBar');
 const popoverEl = document.getElementById('notePopover');
 const popoverNameEl = document.getElementById('popoverNoteName');
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsModalEl = document.getElementById('settingsModal');
+const settingsApplyBtn = document.getElementById('settingsApplyBtn');
+const tempoBpmInput = document.getElementById('tempoBpmInput');
+const quantSelect = document.getElementById('quantSelect');
+const tripletsSelect = document.getElementById('tripletsSelect');
+const manualSettingsEl = document.getElementById('manualSettings');
 
 // Pitch range plausible for the live readout. Not used for transcription —
 // Basic Pitch handles its own pitch range internally.
@@ -146,6 +154,55 @@ window.addEventListener('resize', () => {
 window.addEventListener('scroll', () => {
   if (!popoverEl.hidden) repositionPopover();
 }, { passive: true });
+
+// Settings modal: tempo + quantization.
+settingsBtn.addEventListener('click', openSettingsModal);
+settingsApplyBtn.addEventListener('click', applySettings);
+settingsModalEl.addEventListener('click', (e) => {
+  if (e.target.dataset.closeModal !== undefined) closeSettingsModal();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !settingsModalEl.hidden) closeSettingsModal();
+});
+settingsModalEl.querySelectorAll('input[name="settingsMode"]').forEach((r) => {
+  r.addEventListener('change', updateManualEnabled);
+});
+
+function openSettingsModal() {
+  // Prefill tempo from estimate so manual mode starts with a sensible number.
+  const detected = detectedNotes.length >= 2 ? estimateTempo(detectedNotes) : 120;
+  tempoBpmInput.value = detected;
+  updateManualEnabled();
+  settingsModalEl.hidden = false;
+}
+
+function closeSettingsModal() {
+  settingsModalEl.hidden = true;
+}
+
+function updateManualEnabled() {
+  const mode = settingsModalEl.querySelector('input[name="settingsMode"]:checked').value;
+  manualSettingsEl.classList.toggle('disabled', mode !== 'manual');
+}
+
+function applySettings() {
+  if (!detectedNotes.length) { closeSettingsModal(); return; }
+  const mode = settingsModalEl.querySelector('input[name="settingsMode"]:checked').value;
+  let bpm, subdivision, triplets;
+  if (mode === 'auto') {
+    bpm = estimateTempo(detectedNotes);
+    subdivision = 'sixteenth';
+    triplets = false;
+  } else {
+    bpm = Math.max(40, Math.min(240, Number(tempoBpmInput.value) || 120));
+    subdivision = quantSelect.value;
+    triplets = tripletsSelect.value === 'yes';
+  }
+  detectedNotes = quantize(detectedNotes, { bpm, subdivision, triplets });
+  renderTab();
+  statusEl.textContent = `Quantized — ${bpm} BPM, ${subdivision}${triplets ? ' + triplets' : ''}`;
+  closeSettingsModal();
+}
 
 renderTab();
 initTempoUI();
