@@ -1,8 +1,8 @@
 import { detectPitch } from './pitch.js';
 import { freqToNote, midiToName } from './notes.js';
-import { buildTabDisplay } from './tab.js';
+import { buildTabRows, STRINGS } from './tab.js';
 
-console.log('[voice-to-tab] app.js v5 loaded (YIN + sliding-window mode)');
+console.log('[voice-to-tab] app.js v6 loaded (playback highlights)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -42,6 +42,7 @@ let silenceStreak = 0;
 
 let isPlaying = false;
 let playbackTimeoutId = null;
+const highlightTimeouts = [];
 let synth = null;
 
 recordBtn.addEventListener('click', toggleRecording);
@@ -183,11 +184,37 @@ function modeWithCount(arr) {
 }
 
 function renderTab() {
-  tabDisplayEl.textContent = buildTabDisplay(detectedNotes);
+  const rows = buildTabRows(detectedNotes);
+  tabDisplayEl.innerHTML = STRINGS.map((s, rowIdx) => {
+    const cells = rows[rowIdx]
+      .map((cell, colIdx) => `<span class="tab-cell" data-col="${colIdx}">${cell}</span>`)
+      .join('');
+    return `<div class="tab-row">${s.label}|-${cells}|</div>`;
+  }).join('');
+
   notesLogEl.innerHTML = detectedNotes
-    .map((n) => `<span class="note-chip">${n.name}</span>`)
+    .map((n, i) => `<span class="note-chip" data-chip="${i}">${n.name}</span>`)
     .join('');
+
   playBtn.disabled = detectedNotes.length === 0 || isPlaying;
+}
+
+function highlightNote(idx) {
+  clearHighlights();
+  tabDisplayEl
+    .querySelectorAll(`.tab-cell[data-col="${idx}"]`)
+    .forEach((el) => el.classList.add('active'));
+  const chip = notesLogEl.querySelector(`.note-chip[data-chip="${idx}"]`);
+  if (chip) chip.classList.add('active');
+}
+
+function clearHighlights() {
+  tabDisplayEl
+    .querySelectorAll('.tab-cell.active')
+    .forEach((el) => el.classList.remove('active'));
+  notesLogEl
+    .querySelectorAll('.note-chip.active')
+    .forEach((el) => el.classList.remove('active'));
 }
 
 function clearTab() {
@@ -226,11 +253,23 @@ async function togglePlayback() {
   playBtn.classList.add('playing');
   recordBtn.disabled = true;
 
-  const start = Tone.now() + 0.05;
+  const leadInSec = 0.05;
+  const start = Tone.now() + leadInSec;
   for (let i = 0; i < detectedNotes.length; i++) {
     const freq = Tone.Frequency(detectedNotes[i].midi, 'midi').toFrequency();
     synth.triggerAttack(freq, start + i * noteDur);
   }
+
+  // Schedule visual highlights to track the audio. setTimeout latency is well
+  // under one note duration at any tempo we expose, so the chip / fret light
+  // up in sync with what the ear is hearing.
+  const leadInMs = leadInSec * 1000;
+  for (let i = 0; i < detectedNotes.length; i++) {
+    highlightTimeouts.push(setTimeout(() => highlightNote(i), leadInMs + i * noteDur * 1000));
+  }
+  highlightTimeouts.push(
+    setTimeout(clearHighlights, leadInMs + detectedNotes.length * noteDur * 1000)
+  );
 
   const totalMs = (detectedNotes.length * noteDur + 0.5) * 1000;
   playbackTimeoutId = setTimeout(stopPlayback, totalMs);
@@ -241,6 +280,8 @@ function stopPlayback() {
     clearTimeout(playbackTimeoutId);
     playbackTimeoutId = null;
   }
+  while (highlightTimeouts.length) clearTimeout(highlightTimeouts.pop());
+  clearHighlights();
   if (synth) {
     synth.dispose();
     synth = null;

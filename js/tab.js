@@ -24,13 +24,19 @@ export function noteToTab(midi) {
 }
 
 export function buildTabDisplay(notes) {
-  const lines = STRINGS.map((s) => `${s.label}|-`);
+  const rows = buildTabRows(notes);
+  return STRINGS.map((s, i) => `${s.label}|-${rows[i].join('')}|`).join('\n');
+}
+
+// Returns one array per string of per-column cell strings. Each cell includes
+// the trailing column separator so cells in the same column are equal-width
+// across all six strings — letting them be addressed and highlighted as a
+// vertical column without disrupting layout.
+export function buildTabRows(notes) {
+  const rows = STRINGS.map(() => []);
 
   for (const note of notes) {
     const pos = noteToTab(note.midi);
-    // When a note falls outside the guitar's range, place an 'x' on the closest
-    // string (low E for sub-range notes, high E for super-range) so the column
-    // is still readable.
     const stringIndex = pos
       ? pos.stringIndex
       : note.midi < STRINGS[STRINGS.length - 1].midi
@@ -41,10 +47,9 @@ export function buildTabDisplay(notes) {
 
     for (let i = 0; i < STRINGS.length; i++) {
       const cell = i === stringIndex ? fretStr : '-'.repeat(width);
-      lines[i] += cell + '-';
+      rows[i].push(`${cell}-`);
     }
   }
 
-  for (let i = 0; i < lines.length; i++) lines[i] += '|';
-  return lines.join('\n');
+  return rows;
 }

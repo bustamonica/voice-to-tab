@@ -194,6 +194,24 @@ section h2 {
   white-space: pre;
 }
 
+.tab-row { white-space: pre; }
+
+.tab-cell {
+  border-radius: 3px;
+  transition: background-color 80ms ease, color 80ms ease;
+}
+
+.tab-cell.active {
+  background: var(--accent);
+  color: #1a1206;
+}
+
+.note-chip.active {
+  background: var(--accent);
+  color: #1a1206;
+  border-color: var(--accent);
+}
+
 .notes-list {
   display: flex;
   flex-wrap: wrap;
