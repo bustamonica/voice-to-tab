@@ -4,7 +4,7 @@ import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 import { estimateTempo, quantize } from './quantize.js';
 
-console.log('[voice-to-tab] app.js v16 loaded (paywall: show-but-lock past 10s)');
+console.log('[voice-to-tab] app.js v17 loaded (portal + post-checkout flow)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -35,16 +35,102 @@ const paywallSignInHint = document.getElementById('paywallSignInHint');
 // server isn't reachable yet (we get the strictest behavior in that case).
 let userState = { signedIn: false, premium: false, freeRecordingSeconds: 10 };
 
-fetch('/api/me')
-  .then((r) => r.json())
-  .then((data) => {
-    userState = { ...userState, ...data };
-    if (paywallSignInHint) {
-      paywallSignInHint.style.display = userState.signedIn ? 'none' : '';
+function refreshUserState() {
+  return fetch('/api/me')
+    .then((r) => r.json())
+    .then((data) => {
+      userState = { ...userState, ...data };
+      if (paywallSignInHint) {
+        paywallSignInHint.style.display = userState.signedIn ? 'none' : '';
+      }
+      // If we're now premium, drop any `locked` flags from existing notes so
+      // the user immediately sees the unlocked state without re-recording.
+      if (userState.premium) {
+        let changed = false;
+        for (const n of detectedNotes) {
+          if (n.locked) { n.locked = false; changed = true; }
+        }
+        if (changed) renderTab();
+      }
+      updateAuthChrome();
+      console.log('[voice-to-tab] user state:', userState);
+      return userState;
+    })
+    .catch((err) => console.warn('[voice-to-tab] /api/me failed:', err));
+}
+
+refreshUserState();
+
+// Handle the return from Stripe Checkout. Strip the query params so a reload
+// doesn't re-trigger the toast. The webhook may still be in flight when we
+// land here, so re-poll /api/me a couple of times to pick up the premium
+// flag once it lands.
+(function handleCheckoutReturn() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('subscribed')) {
+    showToast('Subscription active — thanks!');
+    let tries = 0;
+    const poll = setInterval(() => {
+      tries++;
+      refreshUserState().then(() => {
+        if (userState.premium || tries >= 5) clearInterval(poll);
+      });
+    }, 1200);
+    window.history.replaceState({}, '', window.location.pathname);
+  } else if (params.has('canceled')) {
+    showToast('Checkout canceled.');
+    window.history.replaceState({}, '', window.location.pathname);
+  }
+})();
+
+// Lightweight toast — a fixed-position div that fades out after a few seconds.
+function showToast(text) {
+  let el = document.getElementById('vt-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'vt-toast';
+    el.className = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add('visible');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => el.classList.remove('visible'), 3500);
+}
+
+// Drop a "Manage subscription" button into the top nav when the user is a
+// paying subscriber. The button POSTs /api/portal and redirects to Stripe.
+function updateAuthChrome() {
+  const nav = document.querySelector('.topnav');
+  if (!nav) return;
+  let manageBtn = document.getElementById('manageSubBtn');
+  if (userState.premium && !manageBtn) {
+    manageBtn = document.createElement('button');
+    manageBtn.id = 'manageSubBtn';
+    manageBtn.type = 'button';
+    manageBtn.className = 'secondary';
+    manageBtn.textContent = 'Manage subscription';
+    manageBtn.addEventListener('click', openPortal);
+    nav.insertBefore(manageBtn, nav.firstChild);
+  } else if (!userState.premium && manageBtn) {
+    manageBtn.remove();
+  }
+}
+
+async function openPortal() {
+  try {
+    const res = await fetch('/api/portal', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (data?.url) {
+      window.location.href = data.url;
+      return;
     }
-    console.log('[voice-to-tab] user state:', userState);
-  })
-  .catch((err) => console.warn('[voice-to-tab] /api/me failed:', err));
+    showToast(data?.message || 'Could not open billing portal.');
+  } catch (err) {
+    console.error('[voice-to-tab] portal failed:', err);
+    showToast('Could not open billing portal.');
+  }
+}
 
 function openPaywall() {
   if (!paywallModalEl) return;
