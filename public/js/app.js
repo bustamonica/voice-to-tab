@@ -4,7 +4,7 @@ import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 import { estimateTempo, quantize } from './quantize.js';
 
-console.log('[voice-to-tab] app.js v15 loaded (paywall: 10s free for non-premium)');
+console.log('[voice-to-tab] app.js v16 loaded (paywall: show-but-lock past 10s)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -34,7 +34,6 @@ const paywallSignInHint = document.getElementById('paywallSignInHint');
 // Subscription state — fetched from /api/me on load. Defaults assume the
 // server isn't reachable yet (we get the strictest behavior in that case).
 let userState = { signedIn: false, premium: false, freeRecordingSeconds: 10 };
-let recordingDeadlineTimer = null;
 
 fetch('/api/me')
   .then((r) => r.json())
@@ -189,6 +188,7 @@ function canEdit() {
 notesLogEl.addEventListener('mouseover', (e) => {
   const chip = e.target.closest('.note-chip');
   if (!chip || !canEdit()) return;
+  if (chip.classList.contains('locked')) return;
   cancelHoverClose();
   const idx = Number(chip.dataset.chip);
   if (idx !== editingIdx) openPopover(idx);
@@ -200,6 +200,10 @@ popoverEl.addEventListener('mouseleave', scheduleHoverClose);
 notesLogEl.addEventListener('click', (e) => {
   const chip = e.target.closest('.note-chip');
   if (!chip || !canEdit()) return;
+  if (chip.classList.contains('locked')) {
+    openPaywall();
+    return;
+  }
   cancelHoverClose();
   openPopover(Number(chip.dataset.chip));
 });
@@ -332,18 +336,9 @@ async function startRecording() {
   statusEl.classList.add('active');
   playBtn.disabled = true;
 
-  // Free-plan gate: hard-stop recording at the free limit, then open the
-  // paywall. Premium users skip this entirely.
-  if (!userState.premium) {
-    const limit = Number(userState.freeRecordingSeconds) || 10;
-    recordingDeadlineTimer = setTimeout(async () => {
-      if (!recording) return;
-      statusEl.textContent = `Free plan limit reached (${limit}s)`;
-      await stopRecording();
-      openPaywall();
-    }, limit * 1000);
-  }
-
+  // No hard stop here. Free-plan limit is enforced post-transcription by
+  // marking notes that start past the free window as `locked`. The user can
+  // hum as long as they want; locked notes appear dimmed with a lock icon.
   analyseLoop();
 }
 
@@ -363,10 +358,6 @@ function pickMediaRecorderMime() {
 
 async function stopRecording() {
   recording = false;
-  if (recordingDeadlineTimer) {
-    clearTimeout(recordingDeadlineTimer);
-    recordingDeadlineTimer = null;
-  }
   if (rafId) cancelAnimationFrame(rafId);
   rafId = null;
 
@@ -422,18 +413,27 @@ async function runTranscription() {
     });
     const mono = toMonophonic(rawNotes);
 
+    const limit = Number(userState.freeRecordingSeconds) || 10;
     detectedNotes = mono.map((ev) => {
       const midi = Math.round(ev.pitchMidi);
+      const locked = !userState.premium && ev.startTimeSeconds >= limit;
       return {
         midi,
         name: midiToName(midi),
         startTimeSec: ev.startTimeSeconds,
         durationSec: ev.durationSeconds,
         amplitude: ev.amplitude,
+        locked,
       };
     });
     renderTab();
-    statusEl.textContent = `Done — ${detectedNotes.length} notes`;
+    const lockedCount = detectedNotes.filter((n) => n.locked).length;
+    if (lockedCount > 0) {
+      statusEl.textContent = `Done — ${detectedNotes.length} notes (${lockedCount} locked past ${limit}s)`;
+      openPaywall();
+    } else {
+      statusEl.textContent = `Done — ${detectedNotes.length} notes`;
+    }
   } catch (err) {
     console.error('[voice-to-tab] transcription failed:', err);
     statusEl.textContent = `Transcription failed: ${err.message}`;
@@ -482,16 +482,25 @@ function renderTab() {
   const rows = buildTabRows(detectedNotes);
   tabDisplayEl.innerHTML = STRINGS.map((s, rowIdx) => {
     const cells = rows[rowIdx]
-      .map((cell, colIdx) => `<span class="tab-cell" data-col="${colIdx}">${cell}</span>`)
+      .map((cell, colIdx) => {
+        const lockedAttr = detectedNotes[colIdx]?.locked ? ' data-locked="1"' : '';
+        return `<span class="tab-cell${detectedNotes[colIdx]?.locked ? ' locked' : ''}" data-col="${colIdx}"${lockedAttr}>${cell}</span>`;
+      })
       .join('');
     return `<div class="tab-row">${s.label}|-${cells}|</div>`;
   }).join('');
 
   notesLogEl.innerHTML = detectedNotes
-    .map((n, i) => `<span class="note-chip" data-chip="${i}">${n.name}</span>`)
+    .map((n, i) => {
+      const cls = n.locked ? 'note-chip locked' : 'note-chip';
+      const title = n.locked ? ' title="Locked — upgrade to unlock"' : '';
+      const icon = n.locked ? ' <span class="lock-icon" aria-hidden="true">🔒</span>' : '';
+      return `<span class="${cls}" data-chip="${i}"${title}>${n.name}${icon}</span>`;
+    })
     .join('');
 
-  playBtn.disabled = detectedNotes.length === 0 || isPlaying || processing;
+  const playable = detectedNotes.some((n) => !n.locked);
+  playBtn.disabled = !playable || isPlaying || processing;
 }
 
 function highlightNote(idx) {
@@ -639,12 +648,20 @@ async function togglePlayback() {
   // playback rate. triggerAttackRelease sustains each sampled string through
   // the actual note duration, so held notes ring out instead of getting
   // chopped after a single pluck.
+  const playableNotes = detectedNotes.filter((n) => !n.locked);
+  if (playableNotes.length === 0) {
+    stopPlayback();
+    openPaywall();
+    return;
+  }
+
   const leadInSec = 0.05;
-  const baseTime = detectedNotes[0].startTimeSec;
+  const baseTime = playableNotes[0].startTimeSec;
   const audioStart = Tone.now() + leadInSec;
 
   for (let i = 0; i < detectedNotes.length; i++) {
     const n = detectedNotes[i];
+    if (n.locked) continue;
     const offset = (n.startTimeSec - baseTime) / speed;
     const duration = Math.max(0.08, n.durationSec / speed);
     const noteName = Tone.Frequency(n.midi, 'midi').toNote();
@@ -660,10 +677,11 @@ async function togglePlayback() {
   const leadInMs = leadInSec * 1000;
   for (let i = 0; i < detectedNotes.length; i++) {
     const n = detectedNotes[i];
+    if (n.locked) continue;
     const offsetMs = leadInMs + ((n.startTimeSec - baseTime) / speed) * 1000;
     highlightTimeouts.push(setTimeout(() => highlightNote(i), offsetMs));
   }
-  const last = detectedNotes[detectedNotes.length - 1];
+  const last = playableNotes[playableNotes.length - 1];
   const totalSec = (last.startTimeSec - baseTime + last.durationSec) / speed;
   highlightTimeouts.push(setTimeout(clearHighlights, leadInMs + totalSec * 1000));
 

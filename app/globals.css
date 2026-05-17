@@ -480,3 +480,22 @@ footer code {
   text-align: center;
   margin: .25rem 0 0;
 }
+
+/* --- Locked notes (free-tier paywall preview) --- */
+.tab-cell.locked {
+  color: var(--muted);
+  opacity: .35;
+}
+.note-chip.locked {
+  opacity: .55;
+  border-style: dashed;
+  cursor: not-allowed;
+}
+.note-chip.locked:hover {
+  border-color: var(--accent);
+  opacity: .75;
+}
+.lock-icon {
+  margin-left: .25rem;
+  font-size: .75rem;
+}
