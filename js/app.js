@@ -3,7 +3,7 @@ import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 
-console.log('[voice-to-tab] app.js v7 loaded (Basic Pitch transcription)');
+console.log('[voice-to-tab] app.js v8 loaded (Basic Pitch + chip editing)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -16,6 +16,8 @@ const currentFreqEl = document.getElementById('currentFreq');
 const tabDisplayEl = document.getElementById('tabDisplay');
 const notesLogEl = document.getElementById('notesLog');
 const levelBarEl = document.getElementById('levelBar');
+const popoverEl = document.getElementById('notePopover');
+const popoverNameEl = document.getElementById('popoverNoteName');
 
 // Pitch range plausible for the live readout. Not used for transcription —
 // Basic Pitch handles its own pitch range internally.
@@ -45,6 +47,31 @@ playBtn.addEventListener('click', togglePlayback);
 tempoInput.addEventListener('input', () => {
   tempoValueEl.textContent = `${Number(tempoInput.value).toFixed(2)}× speed`;
 });
+
+// Editing: click a chip to open the popover, then ↑ / ↓ / ×.
+let editingIdx = -1;
+notesLogEl.addEventListener('click', (e) => {
+  const chip = e.target.closest('.note-chip');
+  if (!chip) return;
+  if (isPlaying || processing || recording) return;
+  openPopover(Number(chip.dataset.chip));
+});
+popoverEl.addEventListener('click', handlePopoverAction);
+document.addEventListener('click', (e) => {
+  if (popoverEl.hidden) return;
+  if (popoverEl.contains(e.target)) return;
+  if (e.target.closest('.note-chip')) return;
+  closePopover();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closePopover();
+});
+window.addEventListener('resize', () => {
+  if (!popoverEl.hidden) repositionPopover();
+});
+window.addEventListener('scroll', () => {
+  if (!popoverEl.hidden) repositionPopover();
+}, { passive: true });
 
 renderTab();
 initTempoUI();
@@ -270,10 +297,72 @@ function clearHighlights() {
 
 function clearTab() {
   if (isPlaying) stopPlayback();
+  closePopover();
   detectedNotes = [];
   renderTab();
   if (!recording && !processing) {
     statusEl.textContent = 'Ready';
+  }
+}
+
+function openPopover(idx) {
+  if (idx < 0 || idx >= detectedNotes.length) return;
+  editingIdx = idx;
+  popoverEl.hidden = false;
+  refreshPopover();
+}
+
+function refreshPopover() {
+  if (editingIdx < 0 || editingIdx >= detectedNotes.length) {
+    closePopover();
+    return;
+  }
+  popoverNameEl.textContent = detectedNotes[editingIdx].name;
+  notesLogEl.querySelectorAll('.note-chip.selected')
+    .forEach((el) => el.classList.remove('selected'));
+  const chip = notesLogEl.querySelector(`.note-chip[data-chip="${editingIdx}"]`);
+  if (!chip) { closePopover(); return; }
+  chip.classList.add('selected');
+  repositionPopover();
+}
+
+function repositionPopover() {
+  const chip = notesLogEl.querySelector(`.note-chip[data-chip="${editingIdx}"]`);
+  if (!chip) return;
+  const rect = chip.getBoundingClientRect();
+  popoverEl.style.left = `${window.scrollX + rect.left + rect.width / 2}px`;
+  popoverEl.style.top = `${window.scrollY + rect.bottom + 8}px`;
+}
+
+function closePopover() {
+  popoverEl.hidden = true;
+  editingIdx = -1;
+  notesLogEl.querySelectorAll('.note-chip.selected')
+    .forEach((el) => el.classList.remove('selected'));
+}
+
+function handlePopoverAction(e) {
+  const btn = e.target.closest('button[data-action]');
+  if (!btn) return;
+  if (editingIdx < 0 || editingIdx >= detectedNotes.length) return;
+  const action = btn.dataset.action;
+  const note = detectedNotes[editingIdx];
+
+  if (action === 'up' || action === 'down') {
+    const delta = action === 'up' ? 1 : -1;
+    const next = Math.min(120, Math.max(0, note.midi + delta));
+    if (next === note.midi) return;
+    note.midi = next;
+    note.name = midiToName(next);
+    renderTab();
+    refreshPopover();
+  } else if (action === 'delete') {
+    detectedNotes.splice(editingIdx, 1);
+    closePopover();
+    renderTab();
+    statusEl.textContent = detectedNotes.length
+      ? `Edited — ${detectedNotes.length} notes`
+      : 'Ready';
   }
 }
 
@@ -287,6 +376,7 @@ async function togglePlayback() {
     return;
   }
 
+  closePopover();
   await Tone.start();
   synth = new Tone.PluckSynth({
     attackNoise: 1.2,
