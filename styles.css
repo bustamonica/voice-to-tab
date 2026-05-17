@@ -255,6 +255,10 @@ section h2 {
   transform: translateX(-50%);
 }
 
+/* Higher specificity than .note-popover alone so the `hidden` attribute
+   actually hides the element. */
+.note-popover[hidden] { display: none; }
+
 .popover-name {
   font-family: var(--mono);
   font-size: .95rem;

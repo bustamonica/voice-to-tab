@@ -3,7 +3,7 @@ import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 
-console.log('[voice-to-tab] app.js v10 loaded (delete closes timeline gap)');
+console.log('[voice-to-tab] app.js v11 loaded (hover-to-edit + popover hides on Clear)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -48,12 +48,46 @@ tempoInput.addEventListener('input', () => {
   tempoValueEl.textContent = `${Number(tempoInput.value).toFixed(2)}× speed`;
 });
 
-// Editing: click a chip to open the popover, then ↑ / ↓ / ×.
+// Editing: hover a chip to reveal the popover, or click to pin it open.
+// Mouse-leaving both the chip and the popover closes it after a brief grace
+// period so the cursor can travel the gap between them without flicker.
 let editingIdx = -1;
+let hoverCloseTimer = null;
+const HOVER_CLOSE_DELAY_MS = 180;
+
+function scheduleHoverClose() {
+  if (hoverCloseTimer) clearTimeout(hoverCloseTimer);
+  hoverCloseTimer = setTimeout(() => {
+    hoverCloseTimer = null;
+    closePopover();
+  }, HOVER_CLOSE_DELAY_MS);
+}
+function cancelHoverClose() {
+  if (hoverCloseTimer) {
+    clearTimeout(hoverCloseTimer);
+    hoverCloseTimer = null;
+  }
+}
+
+function canEdit() {
+  return !isPlaying && !processing && !recording;
+}
+
+notesLogEl.addEventListener('mouseover', (e) => {
+  const chip = e.target.closest('.note-chip');
+  if (!chip || !canEdit()) return;
+  cancelHoverClose();
+  const idx = Number(chip.dataset.chip);
+  if (idx !== editingIdx) openPopover(idx);
+});
+notesLogEl.addEventListener('mouseleave', scheduleHoverClose);
+popoverEl.addEventListener('mouseenter', cancelHoverClose);
+popoverEl.addEventListener('mouseleave', scheduleHoverClose);
+
 notesLogEl.addEventListener('click', (e) => {
   const chip = e.target.closest('.note-chip');
-  if (!chip) return;
-  if (isPlaying || processing || recording) return;
+  if (!chip || !canEdit()) return;
+  cancelHoverClose();
   openPopover(Number(chip.dataset.chip));
 });
 popoverEl.addEventListener('click', handlePopoverAction);
@@ -335,6 +369,10 @@ function repositionPopover() {
 }
 
 function closePopover() {
+  if (hoverCloseTimer) {
+    clearTimeout(hoverCloseTimer);
+    hoverCloseTimer = null;
+  }
   popoverEl.hidden = true;
   editingIdx = -1;
   notesLogEl.querySelectorAll('.note-chip.selected')
