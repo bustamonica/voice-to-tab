@@ -1,8 +1,9 @@
 import { detectPitch } from './pitch.js';
 import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
+import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 
-console.log('[voice-to-tab] app.js v6 loaded (playback highlights)');
+console.log('[voice-to-tab] app.js v7 loaded (Basic Pitch transcription)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -16,29 +17,22 @@ const tabDisplayEl = document.getElementById('tabDisplay');
 const notesLogEl = document.getElementById('notesLog');
 const levelBarEl = document.getElementById('levelBar');
 
-// Commit a new note when at least COMMIT_AGREE of the last HISTORY_SIZE frames
-// agree on the same MIDI value. A sliding window tolerates the small jitter
-// you naturally get during a sustained hum (one occasional off-frame between
-// many correct ones) without committing transient pitches between notes.
-const HISTORY_SIZE = 9;
-const COMMIT_AGREE = 6;
-const SILENCE_FRAMES_TO_END_NOTE = 5;
-
-// Pitch range that's plausible for human humming / singing.
+// Pitch range plausible for the live readout. Not used for transcription —
+// Basic Pitch handles its own pitch range internally.
 const MIN_FREQ = 65;   // ~C2
 const MAX_FREQ = 1200; // ~D6
 
-const detectedNotes = [];
+// detectedNotes: { midi, name, durationSec, startTimeSec, amplitude }
+let detectedNotes = [];
 
 let audioContext = null;
 let analyser = null;
 let mediaStream = null;
+let mediaRecorder = null;
+let recordedChunks = [];
 let rafId = null;
 let recording = false;
-
-const pitchHistory = [];
-let lastCommittedMidi = null;
-let silenceStreak = 0;
+let processing = false;
 
 let isPlaying = false;
 let playbackTimeoutId = null;
@@ -49,25 +43,33 @@ recordBtn.addEventListener('click', toggleRecording);
 clearBtn.addEventListener('click', clearTab);
 playBtn.addEventListener('click', togglePlayback);
 tempoInput.addEventListener('input', () => {
-  tempoValueEl.textContent = `${tempoInput.value} BPM`;
+  tempoValueEl.textContent = `${Number(tempoInput.value).toFixed(2)}× speed`;
 });
 
 renderTab();
+initTempoUI();
+
+function initTempoUI() {
+  // Repurpose the slider as a playback-rate control. Range 0.25–2.0, default 1.
+  tempoInput.min = '0.25';
+  tempoInput.max = '2';
+  tempoInput.step = '0.05';
+  tempoInput.value = '1';
+  tempoValueEl.textContent = '1.00× speed';
+}
 
 async function toggleRecording() {
-  console.log('[voice-to-tab] record button clicked, recording=', recording);
+  if (processing) return;
   if (recording) {
-    stopRecording('Stopped');
+    await stopRecording();
   } else {
     await startRecording();
   }
 }
 
 async function startRecording() {
-  console.log('[voice-to-tab] requesting microphone...');
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    console.log('[voice-to-tab] microphone granted, tracks=', mediaStream.getTracks().length);
   } catch (err) {
     statusEl.textContent = `Microphone error: ${err.message}`;
     console.error('[voice-to-tab] mic error:', err);
@@ -81,43 +83,135 @@ async function startRecording() {
   analyser.smoothingTimeConstant = 0;
   source.connect(analyser);
 
+  recordedChunks = [];
+  const mimeType = pickMediaRecorderMime();
+  mediaRecorder = mimeType
+    ? new MediaRecorder(mediaStream, { mimeType })
+    : new MediaRecorder(mediaStream);
+  mediaRecorder.ondataavailable = (e) => {
+    if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+  };
+  mediaRecorder.start(250); // emit a chunk every 250ms for smoother stop
+
+  // Warm up the model in the background so it's ready by the time the user
+  // stops recording. Failures here are non-fatal — we retry on stop.
+  loadBasicPitch().catch((err) => console.warn('[voice-to-tab] preload failed:', err));
+
   recording = true;
   recordBtn.textContent = 'Stop Recording';
   recordBtn.classList.add('recording');
   statusEl.textContent = 'Listening';
   statusEl.classList.add('active');
+  playBtn.disabled = true;
 
-  analyse();
+  analyseLoop();
 }
 
-function stopRecording(label) {
-  recording = false;
-  if (rafId) {
-    cancelAnimationFrame(rafId);
-    rafId = null;
+function pickMediaRecorderMime() {
+  if (typeof MediaRecorder === 'undefined') return '';
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/mp4',
+  ];
+  for (const c of candidates) {
+    if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c;
   }
+  return '';
+}
+
+async function stopRecording() {
+  recording = false;
+  if (rafId) cancelAnimationFrame(rafId);
+  rafId = null;
+
+  // Stop the MediaRecorder and collect any final chunks.
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    await new Promise((resolve) => {
+      mediaRecorder.onstop = () => resolve();
+      mediaRecorder.stop();
+    });
+  }
+
   if (mediaStream) {
     mediaStream.getTracks().forEach((t) => t.stop());
     mediaStream = null;
   }
+
+  recordBtn.textContent = 'Start Recording';
+  recordBtn.classList.remove('recording');
+  currentNoteEl.textContent = '—';
+  currentFreqEl.textContent = '';
+  levelBarEl.style.width = '0%';
+
+  if (recordedChunks.length === 0) {
+    statusEl.textContent = 'Stopped (no audio captured)';
+    statusEl.classList.remove('active');
+    cleanupAudioContext();
+    return;
+  }
+
+  await runTranscription();
+}
+
+async function runTranscription() {
+  processing = true;
+  recordBtn.disabled = true;
+  playBtn.disabled = true;
+  statusEl.classList.remove('active');
+  statusEl.textContent = 'Decoding audio…';
+
+  try {
+    const blob = new Blob(recordedChunks, { type: mediaRecorder?.mimeType || 'audio/webm' });
+    const arrayBuffer = await blob.arrayBuffer();
+    // Re-use the existing AudioContext (still open) to decode. If it's already
+    // closed, open a fresh one.
+    const decodeCtx = audioContext && audioContext.state !== 'closed'
+      ? audioContext
+      : new (window.AudioContext || window.webkitAudioContext)();
+    const audioBuffer = await decodeCtx.decodeAudioData(arrayBuffer);
+
+    statusEl.textContent = 'Transcribing… 0%';
+    const rawNotes = await transcribe(audioBuffer, (p) => {
+      statusEl.textContent = `Transcribing… ${Math.round(p * 100)}%`;
+    });
+    const mono = toMonophonic(rawNotes);
+
+    detectedNotes = mono.map((ev) => {
+      const midi = Math.round(ev.pitchMidi);
+      return {
+        midi,
+        name: midiToName(midi),
+        startTimeSec: ev.startTimeSeconds,
+        durationSec: ev.durationSeconds,
+        amplitude: ev.amplitude,
+      };
+    });
+    renderTab();
+    statusEl.textContent = `Done — ${detectedNotes.length} notes`;
+  } catch (err) {
+    console.error('[voice-to-tab] transcription failed:', err);
+    statusEl.textContent = `Transcription failed: ${err.message}`;
+  } finally {
+    processing = false;
+    recordBtn.disabled = false;
+    playBtn.disabled = detectedNotes.length === 0;
+    cleanupAudioContext();
+  }
+}
+
+function cleanupAudioContext() {
   if (audioContext) {
     audioContext.close().catch(() => {});
     audioContext = null;
   }
   analyser = null;
-  resetPending();
-  lastCommittedMidi = null;
-
-  recordBtn.textContent = 'Start Recording';
-  recordBtn.classList.remove('recording');
-  statusEl.textContent = label;
-  statusEl.classList.remove('active');
-  currentNoteEl.textContent = '—';
-  currentFreqEl.textContent = '';
-  levelBarEl.style.width = '0%';
 }
 
-function analyse() {
+// Live pitch readout during recording. Does not commit to detectedNotes —
+// transcription happens after stop. Just gives the user visual feedback.
+function analyseLoop() {
   if (!recording || !analyser) return;
   const buffer = new Float32Array(analyser.fftSize);
   analyser.getFloatTimeDomainData(buffer);
@@ -125,62 +219,19 @@ function analyse() {
   let rms = 0;
   for (let i = 0; i < buffer.length; i++) rms += buffer[i] * buffer[i];
   rms = Math.sqrt(rms / buffer.length);
-  const level = Math.min(1, rms * 8);
-  levelBarEl.style.width = `${(level * 100).toFixed(1)}%`;
+  levelBarEl.style.width = `${(Math.min(1, rms * 8) * 100).toFixed(1)}%`;
 
   const freq = detectPitch(buffer, audioContext.sampleRate);
-
   if (freq >= MIN_FREQ && freq <= MAX_FREQ) {
     const note = freqToNote(freq);
     currentNoteEl.textContent = note.name;
     currentFreqEl.textContent = `(${freq.toFixed(1)} Hz)`;
-    silenceStreak = 0;
-
-    pitchHistory.push(note.midi);
-    if (pitchHistory.length > HISTORY_SIZE) pitchHistory.shift();
-
-    const consensus = modeWithCount(pitchHistory);
-    if (consensus.count >= COMMIT_AGREE && consensus.midi !== lastCommittedMidi) {
-      commitNote({ midi: consensus.midi, name: midiToName(consensus.midi) });
-    }
   } else {
     currentNoteEl.textContent = '—';
     currentFreqEl.textContent = '';
-    silenceStreak++;
-    if (silenceStreak >= SILENCE_FRAMES_TO_END_NOTE) resetPending();
-
   }
 
-  rafId = requestAnimationFrame(analyse);
-}
-
-function commitNote(note) {
-  lastCommittedMidi = note.midi;
-  detectedNotes.push(note);
-  renderTab();
-}
-
-function resetPending() {
-  pitchHistory.length = 0;
-  silenceStreak = 0;
-  // A gap of silence ends a held note, so the next detection of the same MIDI
-  // value should be treated as a new note onset.
-  lastCommittedMidi = null;
-}
-
-function modeWithCount(arr) {
-  const counts = new Map();
-  let bestMidi = arr[0];
-  let bestCount = 0;
-  for (const m of arr) {
-    const c = (counts.get(m) || 0) + 1;
-    counts.set(m, c);
-    if (c > bestCount) {
-      bestCount = c;
-      bestMidi = m;
-    }
-  }
-  return { midi: bestMidi, count: bestCount };
+  rafId = requestAnimationFrame(analyseLoop);
 }
 
 function renderTab() {
@@ -196,7 +247,7 @@ function renderTab() {
     .map((n, i) => `<span class="note-chip" data-chip="${i}">${n.name}</span>`)
     .join('');
 
-  playBtn.disabled = detectedNotes.length === 0 || isPlaying;
+  playBtn.disabled = detectedNotes.length === 0 || isPlaying || processing;
 }
 
 function highlightNote(idx) {
@@ -219,17 +270,15 @@ function clearHighlights() {
 
 function clearTab() {
   if (isPlaying) stopPlayback();
-  detectedNotes.length = 0;
-  resetPending();
-  lastCommittedMidi = null;
+  detectedNotes = [];
   renderTab();
+  if (!recording && !processing) {
+    statusEl.textContent = 'Ready';
+  }
 }
 
 async function togglePlayback() {
-  if (isPlaying) {
-    stopPlayback();
-    return;
-  }
+  if (isPlaying) { stopPlayback(); return; }
   if (!detectedNotes.length) return;
 
   const Tone = window.Tone;
@@ -245,34 +294,41 @@ async function togglePlayback() {
     resonance: 0.92,
   }).toDestination();
 
-  const bpm = Number(tempoInput.value) || 100;
-  const noteDur = 60 / bpm; // one beat = quarter note
+  const rate = Number(tempoInput.value) || 1;
+  const speed = Math.max(0.1, rate);
 
   isPlaying = true;
   playBtn.textContent = 'Stop';
   playBtn.classList.add('playing');
   recordBtn.disabled = true;
 
+  // Notes have absolute startTimeSec from the original recording. Anchor the
+  // first note at "now + lead-in" and offset the rest by their start delta
+  // scaled by playback rate. Each pluck's "release time" is derived from
+  // durationSec; PluckSynth is a one-shot but we still use the duration to
+  // pace the visual highlights and the synthwide end-of-playback timeout.
   const leadInSec = 0.05;
-  const start = Tone.now() + leadInSec;
+  const baseTime = detectedNotes[0].startTimeSec;
+  const audioStart = Tone.now() + leadInSec;
+
   for (let i = 0; i < detectedNotes.length; i++) {
-    const freq = Tone.Frequency(detectedNotes[i].midi, 'midi').toFrequency();
-    synth.triggerAttack(freq, start + i * noteDur);
+    const n = detectedNotes[i];
+    const offset = (n.startTimeSec - baseTime) / speed;
+    const freq = Tone.Frequency(n.midi, 'midi').toFrequency();
+    synth.triggerAttack(freq, audioStart + offset);
   }
 
-  // Schedule visual highlights to track the audio. setTimeout latency is well
-  // under one note duration at any tempo we expose, so the chip / fret light
-  // up in sync with what the ear is hearing.
   const leadInMs = leadInSec * 1000;
   for (let i = 0; i < detectedNotes.length; i++) {
-    highlightTimeouts.push(setTimeout(() => highlightNote(i), leadInMs + i * noteDur * 1000));
+    const n = detectedNotes[i];
+    const offsetMs = leadInMs + ((n.startTimeSec - baseTime) / speed) * 1000;
+    highlightTimeouts.push(setTimeout(() => highlightNote(i), offsetMs));
   }
-  highlightTimeouts.push(
-    setTimeout(clearHighlights, leadInMs + detectedNotes.length * noteDur * 1000)
-  );
+  const last = detectedNotes[detectedNotes.length - 1];
+  const totalSec = (last.startTimeSec - baseTime + last.durationSec) / speed;
+  highlightTimeouts.push(setTimeout(clearHighlights, leadInMs + totalSec * 1000));
 
-  const totalMs = (detectedNotes.length * noteDur + 0.5) * 1000;
-  playbackTimeoutId = setTimeout(stopPlayback, totalMs);
+  playbackTimeoutId = setTimeout(stopPlayback, leadInMs + (totalSec + 0.5) * 1000);
 }
 
 function stopPlayback() {

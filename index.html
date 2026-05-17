@@ -10,7 +10,7 @@
   <main>
     <header>
       <h1>Voice to Guitar Tab</h1>
-      <p class="subtitle">Hum a melody and get guitar tablature in real time.</p>
+      <p class="subtitle">Hum a melody. On stop, Spotify's Basic Pitch neural net transcribes it into a guitar tab.</p>
     </header>
 
     <section class="controls">
@@ -18,9 +18,9 @@
       <button id="playBtn" class="secondary" type="button" disabled>Play</button>
       <button id="clearBtn" class="secondary" type="button">Clear</button>
       <label class="tempo">
-        Tempo
-        <input id="tempoInput" type="range" min="40" max="200" value="100" />
-        <span id="tempoValue" class="freq">100 BPM</span>
+        Speed
+        <input id="tempoInput" type="range" min="0.25" max="2" step="0.05" value="1" />
+        <span id="tempoValue" class="freq">1.00× speed</span>
       </label>
     </section>
 
@@ -48,8 +48,10 @@
 
     <footer>
       <p>
-        Tip: hum clearly, one note at a time. Lower notes (around C3–C5) work
-        best. Run via <code>npm run serve</code> or any static HTTP server —
+        Tip: hum a short phrase (a few seconds) and then click Stop — the model
+        is polyphonic so transcription happens after recording, not live. First
+        run downloads ~2&nbsp;MB of TensorFlow.js + the Basic Pitch model from a
+        CDN. Run via <code>npm run serve</code> or any static HTTP server —
         microphone access requires <code>http://localhost</code> or HTTPS.
       </p>
     </footer>
