@@ -29,15 +29,35 @@ export function loadBasicPitch() {
   return basicPitchPromise;
 }
 
+const TARGET_SAMPLE_RATE = 22050;
+
+// Basic Pitch's evaluateModel throws if the AudioBuffer isn't already at
+// 22050 Hz. The Web Audio API can do the resampling for us by rendering the
+// source buffer through an OfflineAudioContext configured at the target rate;
+// it also downmixes stereo to mono automatically when destination has 1
+// channel.
+export async function resampleTo22050(audioBuffer) {
+  if (audioBuffer.sampleRate === TARGET_SAMPLE_RATE) return audioBuffer;
+  const targetLength = Math.ceil(audioBuffer.duration * TARGET_SAMPLE_RATE);
+  const Offline = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const offline = new Offline(1, targetLength, TARGET_SAMPLE_RATE);
+  const src = offline.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(offline.destination);
+  src.start(0);
+  return offline.startRendering();
+}
+
 export async function transcribe(audioBuffer, onProgress) {
   const [mod, bp] = await Promise.all([loadModule(), loadBasicPitch()]);
+  const resampled = await resampleTo22050(audioBuffer);
 
   const frames = [];
   const onsets = [];
   const contours = [];
 
   await bp.evaluateModel(
-    audioBuffer,
+    resampled,
     (f, o, c) => {
       for (const row of f) frames.push(row);
       for (const row of o) onsets.push(row);

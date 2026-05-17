@@ -3,7 +3,7 @@ import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 
-console.log('[voice-to-tab] app.js v8 loaded (Basic Pitch + chip editing)');
+console.log('[voice-to-tab] app.js v9 loaded (resample to 22050 Hz before Basic Pitch)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
