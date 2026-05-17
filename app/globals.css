@@ -522,3 +522,34 @@ footer code {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+
+/* --- Inline "subscribe to unlock" CTA chip between free and locked --- */
+.unlock-cta {
+  font-family: var(--mono);
+  font-size: .85rem;
+  background: linear-gradient(90deg, var(--accent), #f97316);
+  color: #1a1206;
+  border: none;
+  border-radius: 999px;
+  padding: .25rem .85rem;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: .02em;
+  box-shadow: 0 0 0 2px rgba(245, 158, 11, 0.18);
+  transition: transform 120ms ease;
+}
+.unlock-cta:hover { transform: scale(1.03); }
+.unlock-cta:active { transform: scale(0.98); }
+
+/* --- Premium badge in top nav --- */
+.premium-badge {
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  padding: .25rem .65rem;
+  background: linear-gradient(90deg, var(--accent), #f97316);
+  color: #1a1206;
+  border-radius: 999px;
+  cursor: help;
+}

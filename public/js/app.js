@@ -4,7 +4,7 @@ import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 import { estimateTempo, quantize } from './quantize.js';
 
-console.log('[voice-to-tab] app.js v17 loaded (portal + post-checkout flow)');
+console.log('[voice-to-tab] app.js v18 loaded (inline unlock CTA + sub info)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -103,17 +103,46 @@ function showToast(text) {
 function updateAuthChrome() {
   const nav = document.querySelector('.topnav');
   if (!nav) return;
+
+  let badge = document.getElementById('premiumBadge');
   let manageBtn = document.getElementById('manageSubBtn');
-  if (userState.premium && !manageBtn) {
-    manageBtn = document.createElement('button');
-    manageBtn.id = 'manageSubBtn';
-    manageBtn.type = 'button';
-    manageBtn.className = 'secondary';
-    manageBtn.textContent = 'Manage subscription';
-    manageBtn.addEventListener('click', openPortal);
-    nav.insertBefore(manageBtn, nav.firstChild);
-  } else if (!userState.premium && manageBtn) {
-    manageBtn.remove();
+
+  if (userState.premium) {
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.id = 'premiumBadge';
+      badge.className = 'premium-badge';
+      badge.textContent = 'Premium';
+      nav.insertBefore(badge, nav.firstChild);
+    }
+    if (!manageBtn) {
+      manageBtn = document.createElement('button');
+      manageBtn.id = 'manageSubBtn';
+      manageBtn.type = 'button';
+      manageBtn.className = 'secondary';
+      manageBtn.textContent = 'Manage subscription';
+      manageBtn.addEventListener('click', openPortal);
+      nav.insertBefore(manageBtn, nav.firstChild);
+    }
+    // Fetch / refresh the renewal date in the badge tooltip.
+    fetch('/api/subscription')
+      .then((r) => r.json())
+      .then((sub) => {
+        if (!sub) return;
+        const date = sub.current_period_end
+          ? new Date(sub.current_period_end).toLocaleDateString()
+          : null;
+        const plan = sub.plan ? sub.plan : '';
+        badge.title = date
+          ? `${plan} plan — renews ${date}`
+          : plan
+            ? `${plan} plan`
+            : 'Active subscription';
+      })
+      .catch(() => {});
+  } else {
+    if (badge) badge.remove();
+    if (manageBtn) manageBtn.remove();
   }
 }
 
@@ -284,6 +313,10 @@ popoverEl.addEventListener('mouseenter', cancelHoverClose);
 popoverEl.addEventListener('mouseleave', scheduleHoverClose);
 
 notesLogEl.addEventListener('click', (e) => {
+  if (e.target.closest('[data-open-paywall]')) {
+    openPaywall();
+    return;
+  }
   const chip = e.target.closest('.note-chip');
   if (!chip || !canEdit()) return;
   if (chip.classList.contains('locked')) {
@@ -576,12 +609,17 @@ function renderTab() {
     return `<div class="tab-row">${s.label}|-${cells}|</div>`;
   }).join('');
 
+  const firstLockedIdx = detectedNotes.findIndex((n) => n.locked);
   notesLogEl.innerHTML = detectedNotes
     .map((n, i) => {
+      const divider =
+        i === firstLockedIdx
+          ? '<button type="button" class="unlock-cta" data-open-paywall>🔒 Subscribe to unlock</button>'
+          : '';
       const cls = n.locked ? 'note-chip locked' : 'note-chip';
       const title = n.locked ? ' title="Locked — upgrade to unlock"' : '';
       const icon = n.locked ? ' <span class="lock-icon" aria-hidden="true">🔒</span>' : '';
-      return `<span class="${cls}" data-chip="${i}"${title}>${n.name}${icon}</span>`;
+      return `${divider}<span class="${cls}" data-chip="${i}"${title}>${n.name}${icon}</span>`;
     })
     .join('');
 
