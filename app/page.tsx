@@ -2,7 +2,8 @@ import {
   SignInButton,
   SignUpButton,
   UserButton,
-  Show,
+  SignedIn,
+  SignedOut,
 } from '@clerk/nextjs';
 import Script from 'next/script';
 
@@ -14,17 +15,17 @@ export default function Page() {
       <nav className="topnav">
         {clerkEnabled ? (
           <>
-            <Show when="signed-out">
+            <SignedOut>
               <SignInButton mode="modal">
                 <button type="button" className="secondary">Sign in</button>
               </SignInButton>
               <SignUpButton mode="modal">
                 <button type="button" className="primary">Sign up</button>
               </SignUpButton>
-            </Show>
-            <Show when="signed-in">
+            </SignedOut>
+            <SignedIn>
               <UserButton afterSignOutUrl="/" />
-            </Show>
+            </SignedIn>
           </>
         ) : (
           <span className="dev-mode-pill" title="Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY in .env.local to enable auth.">
