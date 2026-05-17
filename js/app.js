@@ -3,7 +3,7 @@ import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 
-console.log('[voice-to-tab] app.js v9 loaded (resample to 22050 Hz before Basic Pitch)');
+console.log('[voice-to-tab] app.js v10 loaded (delete closes timeline gap)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -357,6 +357,17 @@ function handlePopoverAction(e) {
     renderTab();
     refreshPopover();
   } else if (action === 'delete') {
+    // Close the timeline hole left by the deleted note. Shift every later
+    // note left by (next.start - deleted.start) — that removes the deleted
+    // note's own duration plus any silence immediately after it, but
+    // preserves any rest that was already before it.
+    if (editingIdx < detectedNotes.length - 1) {
+      const shift = detectedNotes[editingIdx + 1].startTimeSec
+                  - detectedNotes[editingIdx].startTimeSec;
+      for (let i = editingIdx + 1; i < detectedNotes.length; i++) {
+        detectedNotes[i].startTimeSec -= shift;
+      }
+    }
     detectedNotes.splice(editingIdx, 1);
     closePopover();
     renderTab();
