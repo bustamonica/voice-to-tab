@@ -553,3 +553,15 @@ footer code {
   border-radius: 999px;
   cursor: help;
 }
+
+/* --- Dev mode (no Clerk env vars) pill --- */
+.dev-mode-pill {
+  font-size: .75rem;
+  font-weight: 600;
+  padding: .35rem .75rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--accent);
+  border: 1px dashed var(--accent);
+  cursor: help;
+}

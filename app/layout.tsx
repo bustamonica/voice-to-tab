@@ -8,16 +8,19 @@ export const metadata: Metadata = {
     "Hum a melody. On stop, Spotify's Basic Pitch neural net transcribes it into a guitar tab.",
 };
 
+const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
 export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <ClerkProvider>
-      <html lang="en">
-        <body>{children}</body>
-      </html>
-    </ClerkProvider>
+  const body = (
+    <html lang="en">
+      <body>{children}</body>
+    </html>
   );
+  // When Clerk env vars aren't configured, render without the provider so
+  // the rest of the app still boots (just without auth).
+  return clerkEnabled ? <ClerkProvider>{body}</ClerkProvider> : body;
 }

@@ -6,21 +6,31 @@ import {
 } from '@clerk/nextjs';
 import Script from 'next/script';
 
+const clerkEnabled = !!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+
 export default function Page() {
   return (
     <main>
       <nav className="topnav">
-        <Show when="signed-out">
-          <SignInButton mode="modal">
-            <button type="button" className="secondary">Sign in</button>
-          </SignInButton>
-          <SignUpButton mode="modal">
-            <button type="button" className="primary">Sign up</button>
-          </SignUpButton>
-        </Show>
-        <Show when="signed-in">
-          <UserButton afterSignOutUrl="/" />
-        </Show>
+        {clerkEnabled ? (
+          <>
+            <Show when="signed-out">
+              <SignInButton mode="modal">
+                <button type="button" className="secondary">Sign in</button>
+              </SignInButton>
+              <SignUpButton mode="modal">
+                <button type="button" className="primary">Sign up</button>
+              </SignUpButton>
+            </Show>
+            <Show when="signed-in">
+              <UserButton afterSignOutUrl="/" />
+            </Show>
+          </>
+        ) : (
+          <span className="dev-mode-pill" title="Set NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY and CLERK_SECRET_KEY in .env.local to enable auth.">
+            Dev mode · no auth
+          </span>
+        )}
       </nav>
 
       <header>
