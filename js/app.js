@@ -3,7 +3,7 @@ import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 
-console.log('[voice-to-tab] app.js v11 loaded (hover-to-edit + popover hides on Clear)');
+console.log('[voice-to-tab] app.js v12 loaded (Tone.Sampler guitar + reverb + sustain)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -39,7 +39,44 @@ let processing = false;
 let isPlaying = false;
 let playbackTimeoutId = null;
 const highlightTimeouts = [];
-let synth = null;
+let instrument = null;        // { sampler, reverb }
+let instrumentReady = null;   // Promise<{sampler, reverb}>
+
+// 10 sampled notes spanning A2 to C5. Tone.Sampler pitch-shifts the nearest
+// one to fill in the rest of the fretboard — minor-third spacing gives good
+// fidelity without forcing a huge download. Files come from
+// nbrosowsky/tonejs-instruments (filename convention: 's' for sharp).
+const GUITAR_SAMPLES = {
+  'A2': 'A2.mp3',
+  'C3': 'C3.mp3',
+  'D#3': 'Ds3.mp3',
+  'F#3': 'Fs3.mp3',
+  'A3': 'A3.mp3',
+  'C4': 'C4.mp3',
+  'D#4': 'Ds4.mp3',
+  'F#4': 'Fs4.mp3',
+  'A4': 'A4.mp3',
+  'C5': 'C5.mp3',
+};
+const GUITAR_BASE_URL = 'https://cdn.jsdelivr.net/gh/nbrosowsky/tonejs-instruments@master/samples/guitar-acoustic/';
+
+function getInstrument() {
+  if (instrumentReady) return instrumentReady;
+  const Tone = window.Tone;
+  if (!Tone) return Promise.reject(new Error('Tone.js not loaded'));
+
+  // Hall-ish reverb, restrained wet so the picking stays articulate.
+  const reverb = new Tone.Reverb({ decay: 1.6, wet: 0.22, preDelay: 0.02 }).toDestination();
+  const sampler = new Tone.Sampler({
+    urls: GUITAR_SAMPLES,
+    baseUrl: GUITAR_BASE_URL,
+    release: 0.8,
+  }).connect(reverb);
+
+  instrument = { sampler, reverb };
+  instrumentReady = Tone.loaded().then(() => instrument);
+  return instrumentReady;
+}
 
 recordBtn.addEventListener('click', toggleRecording);
 clearBtn.addEventListener('click', clearTab);
@@ -157,6 +194,11 @@ async function startRecording() {
   // Warm up the model in the background so it's ready by the time the user
   // stops recording. Failures here are non-fatal — we retry on stop.
   loadBasicPitch().catch((err) => console.warn('[voice-to-tab] preload failed:', err));
+  // Same for the guitar samples — start downloading now so the first Play
+  // doesn't make the user wait.
+  if (window.Tone) {
+    getInstrument().catch((err) => console.warn('[voice-to-tab] sample preload failed:', err));
+  }
 
   recording = true;
   recordBtn.textContent = 'Stop Recording';
@@ -427,11 +469,20 @@ async function togglePlayback() {
 
   closePopover();
   await Tone.start();
-  synth = new Tone.PluckSynth({
-    attackNoise: 1.2,
-    dampening: 4000,
-    resonance: 0.92,
-  }).toDestination();
+
+  // Samples may still be downloading the first time around. Surface that.
+  playBtn.textContent = 'Loading…';
+  playBtn.disabled = true;
+  let sampler;
+  try {
+    ({ sampler } = await getInstrument());
+  } catch (err) {
+    console.error('[voice-to-tab] sample load failed:', err);
+    statusEl.textContent = `Could not load guitar samples: ${err.message}`;
+    playBtn.textContent = 'Play';
+    playBtn.disabled = detectedNotes.length === 0;
+    return;
+  }
 
   const rate = Number(tempoInput.value) || 1;
   const speed = Math.max(0.1, rate);
@@ -439,13 +490,14 @@ async function togglePlayback() {
   isPlaying = true;
   playBtn.textContent = 'Stop';
   playBtn.classList.add('playing');
+  playBtn.disabled = false;
   recordBtn.disabled = true;
 
-  // Notes have absolute startTimeSec from the original recording. Anchor the
-  // first note at "now + lead-in" and offset the rest by their start delta
-  // scaled by playback rate. Each pluck's "release time" is derived from
-  // durationSec; PluckSynth is a one-shot but we still use the duration to
-  // pace the visual highlights and the synthwide end-of-playback timeout.
+  // Notes carry absolute startTimeSec from the recording. Anchor the first
+  // note at "now + lead-in" and offset the rest by the start delta scaled by
+  // playback rate. triggerAttackRelease sustains each sampled string through
+  // the actual note duration, so held notes ring out instead of getting
+  // chopped after a single pluck.
   const leadInSec = 0.05;
   const baseTime = detectedNotes[0].startTimeSec;
   const audioStart = Tone.now() + leadInSec;
@@ -453,8 +505,15 @@ async function togglePlayback() {
   for (let i = 0; i < detectedNotes.length; i++) {
     const n = detectedNotes[i];
     const offset = (n.startTimeSec - baseTime) / speed;
-    const freq = Tone.Frequency(n.midi, 'midi').toFrequency();
-    synth.triggerAttack(freq, audioStart + offset);
+    const duration = Math.max(0.08, n.durationSec / speed);
+    const noteName = Tone.Frequency(n.midi, 'midi').toNote();
+    // Map the model's per-note amplitude into a useful velocity range so
+    // dynamics from the original hum carry over without making quiet notes
+    // inaudible. Amplitudes that came from manual edits (no amplitude field)
+    // fall back to a neutral 0.85.
+    const amp = typeof n.amplitude === 'number' ? n.amplitude : 0.85;
+    const velocity = Math.min(1, Math.max(0.4, 0.45 + 0.6 * amp));
+    sampler.triggerAttackRelease(noteName, duration, audioStart + offset, velocity);
   }
 
   const leadInMs = leadInSec * 1000;
@@ -467,7 +526,8 @@ async function togglePlayback() {
   const totalSec = (last.startTimeSec - baseTime + last.durationSec) / speed;
   highlightTimeouts.push(setTimeout(clearHighlights, leadInMs + totalSec * 1000));
 
-  playbackTimeoutId = setTimeout(stopPlayback, leadInMs + (totalSec + 0.5) * 1000);
+  // Extra tail for the reverb wash to die out naturally.
+  playbackTimeoutId = setTimeout(stopPlayback, leadInMs + (totalSec + 1.5) * 1000);
 }
 
 function stopPlayback() {
@@ -477,10 +537,9 @@ function stopPlayback() {
   }
   while (highlightTimeouts.length) clearTimeout(highlightTimeouts.pop());
   clearHighlights();
-  if (synth) {
-    synth.dispose();
-    synth = null;
-  }
+  // Stop any still-ringing notes, but keep the sampler cached so the next
+  // Play doesn't have to re-download the samples.
+  if (instrument && instrument.sampler) instrument.sampler.releaseAll();
   isPlaying = false;
   playBtn.textContent = 'Play';
   playBtn.classList.remove('playing');
