@@ -4,7 +4,7 @@ import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 import { estimateTempo, quantize } from './quantize.js';
 
-console.log('[voice-to-tab] app.js v14 loaded (tempo + quantization modal)');
+console.log('[voice-to-tab] app.js v15 loaded (paywall: 10s free for non-premium)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -26,6 +26,71 @@ const tempoBpmInput = document.getElementById('tempoBpmInput');
 const quantSelect = document.getElementById('quantSelect');
 const tripletsSelect = document.getElementById('tripletsSelect');
 const manualSettingsEl = document.getElementById('manualSettings');
+const paywallModalEl = document.getElementById('paywallModal');
+const subscribeMonthlyBtn = document.getElementById('subscribeMonthlyBtn');
+const subscribeYearlyBtn = document.getElementById('subscribeYearlyBtn');
+const paywallSignInHint = document.getElementById('paywallSignInHint');
+
+// Subscription state — fetched from /api/me on load. Defaults assume the
+// server isn't reachable yet (we get the strictest behavior in that case).
+let userState = { signedIn: false, premium: false, freeRecordingSeconds: 10 };
+let recordingDeadlineTimer = null;
+
+fetch('/api/me')
+  .then((r) => r.json())
+  .then((data) => {
+    userState = { ...userState, ...data };
+    if (paywallSignInHint) {
+      paywallSignInHint.style.display = userState.signedIn ? 'none' : '';
+    }
+    console.log('[voice-to-tab] user state:', userState);
+  })
+  .catch((err) => console.warn('[voice-to-tab] /api/me failed:', err));
+
+function openPaywall() {
+  if (!paywallModalEl) return;
+  if (paywallSignInHint) {
+    paywallSignInHint.style.display = userState.signedIn ? 'none' : '';
+  }
+  paywallModalEl.hidden = false;
+}
+function closePaywall() {
+  if (paywallModalEl) paywallModalEl.hidden = true;
+}
+if (paywallModalEl) {
+  paywallModalEl.addEventListener('click', (e) => {
+    if (e.target && e.target.dataset && e.target.dataset.closePaywall !== undefined) {
+      closePaywall();
+    }
+  });
+}
+async function startSubscribe(plan) {
+  if (!userState.signedIn) {
+    closePaywall();
+    // Best-effort: trigger Clerk's sign-in by clicking the Sign-in button.
+    const signInBtn = document.querySelector('.topnav button.secondary');
+    if (signInBtn) signInBtn.click();
+    return;
+  }
+  try {
+    const res = await fetch('/api/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data?.url) {
+      window.location.href = data.url; // Stripe Checkout (Phase 3)
+      return;
+    }
+    alert(data?.message || 'Subscription flow not yet wired up (Phase 3).');
+  } catch (err) {
+    console.error('[voice-to-tab] checkout failed:', err);
+    alert('Could not start checkout: ' + err.message);
+  }
+}
+if (subscribeMonthlyBtn) subscribeMonthlyBtn.addEventListener('click', () => startSubscribe('monthly'));
+if (subscribeYearlyBtn) subscribeYearlyBtn.addEventListener('click', () => startSubscribe('yearly'));
 
 // Pitch range plausible for the live readout. Not used for transcription —
 // Basic Pitch handles its own pitch range internally.
@@ -267,6 +332,18 @@ async function startRecording() {
   statusEl.classList.add('active');
   playBtn.disabled = true;
 
+  // Free-plan gate: hard-stop recording at the free limit, then open the
+  // paywall. Premium users skip this entirely.
+  if (!userState.premium) {
+    const limit = Number(userState.freeRecordingSeconds) || 10;
+    recordingDeadlineTimer = setTimeout(async () => {
+      if (!recording) return;
+      statusEl.textContent = `Free plan limit reached (${limit}s)`;
+      await stopRecording();
+      openPaywall();
+    }, limit * 1000);
+  }
+
   analyseLoop();
 }
 
@@ -286,6 +363,10 @@ function pickMediaRecorderMime() {
 
 async function stopRecording() {
   recording = false;
+  if (recordingDeadlineTimer) {
+    clearTimeout(recordingDeadlineTimer);
+    recordingDeadlineTimer = null;
+  }
   if (rafId) cancelAnimationFrame(rafId);
   rafId = null;
 

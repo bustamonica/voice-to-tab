@@ -1,10 +1,24 @@
 {
   "name": "voice-to-tab",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hum into your mic and get guitar tablature back",
   "private": true,
-  "type": "module",
   "scripts": {
-    "serve": "npx --yes serve -p 8080 ."
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^6.0.0",
+    "next": "^15.0.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.6.0"
   }
 }
