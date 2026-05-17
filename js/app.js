@@ -3,7 +3,7 @@ import { freqToNote, midiToName } from './notes.js';
 import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 
-console.log('[voice-to-tab] app.js v12 loaded (Tone.Sampler guitar + reverb + sustain)');
+console.log('[voice-to-tab] app.js v13 loaded (samples self-hosted)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -44,8 +44,11 @@ let instrumentReady = null;   // Promise<{sampler, reverb}>
 
 // 10 sampled notes spanning A2 to C5. Tone.Sampler pitch-shifts the nearest
 // one to fill in the rest of the fretboard — minor-third spacing gives good
-// fidelity without forcing a huge download. Files come from
-// nbrosowsky/tonejs-instruments (filename convention: 's' for sharp).
+// fidelity without forcing a huge download. Files originate from
+// nbrosowsky/tonejs-instruments (filename convention: 's' for sharp) but are
+// served from this project's own /samples directory so we don't depend on any
+// third-party CDN that could be blocked by content blockers / corporate
+// networks / regional restrictions.
 const GUITAR_SAMPLES = {
   'A2': 'A2.mp3',
   'C3': 'C3.mp3',
@@ -58,7 +61,7 @@ const GUITAR_SAMPLES = {
   'A4': 'A4.mp3',
   'C5': 'C5.mp3',
 };
-const GUITAR_BASE_URL = 'https://cdn.jsdelivr.net/gh/nbrosowsky/tonejs-instruments@master/samples/guitar-acoustic/';
+const GUITAR_BASE_URL = new URL('../samples/guitar-acoustic/', import.meta.url).href;
 
 function getInstrument() {
   if (instrumentReady) return instrumentReady;
