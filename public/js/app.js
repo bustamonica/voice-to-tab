@@ -4,7 +4,7 @@ import { buildTabRows, STRINGS } from './tab.js';
 import { loadBasicPitch, transcribe, toMonophonic } from './basicPitch.js';
 import { estimateTempo, quantize } from './quantize.js';
 
-console.log('[voice-to-tab] app.js v18 loaded (inline unlock CTA + sub info)');
+console.log('[voice-to-tab] app.js v19 loaded (gate by recording duration, not just notes)');
 
 const recordBtn = document.getElementById('recordBtn');
 const playBtn = document.getElementById('playBtn');
@@ -533,9 +533,20 @@ async function runTranscription() {
     const mono = toMonophonic(rawNotes);
 
     const limit = Number(userState.freeRecordingSeconds) || 10;
+    const recordingDuration = audioBuffer ? audioBuffer.duration : 0;
+    const overLimit = recordingDuration > limit;
+    const shouldGate = !userState.premium && overLimit;
+    console.log('[voice-to-tab] paywall check:', {
+      premium: userState.premium,
+      signedIn: userState.signedIn,
+      limit,
+      recordingDuration: recordingDuration.toFixed(2),
+      overLimit,
+      shouldGate,
+    });
     detectedNotes = mono.map((ev) => {
       const midi = Math.round(ev.pitchMidi);
-      const locked = !userState.premium && ev.startTimeSeconds >= limit;
+      const locked = shouldGate && ev.startTimeSeconds >= limit;
       return {
         midi,
         name: midiToName(midi),
@@ -547,8 +558,11 @@ async function runTranscription() {
     });
     renderTab();
     const lockedCount = detectedNotes.filter((n) => n.locked).length;
-    if (lockedCount > 0) {
-      statusEl.textContent = `Done — ${detectedNotes.length} notes (${lockedCount} locked past ${limit}s)`;
+    if (shouldGate) {
+      statusEl.textContent =
+        lockedCount > 0
+          ? `Done — ${detectedNotes.length} notes (${lockedCount} locked past ${limit}s)`
+          : `Done — recording over ${limit}s limit`;
       openPaywall();
     } else {
       statusEl.textContent = `Done — ${detectedNotes.length} notes`;
